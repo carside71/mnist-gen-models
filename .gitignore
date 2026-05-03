@@ -1,0 +1,5 @@
+*locals/
+*backups/
+*__pycache__/
+*.pt
+*.pth

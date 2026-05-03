@@ -19,6 +19,8 @@ BATCH_SIZE="${BATCH_SIZE:-256}"
 LR="${LR:-2e-4}"
 NUM_WORKERS="${NUM_WORKERS:-8}"
 BASE_CHANNELS="${BASE_CHANNELS:-64}"
+NUM_CLASSES="${NUM_CLASSES:-10}"
+P_UNCOND="${P_UNCOND:-0.1}"
 SEED="${SEED:-42}"
 VAL_RATIO="${VAL_RATIO:-0.1}"
 
@@ -33,6 +35,8 @@ python "${PROJECT_ROOT}/src/train_flow.py" \
     --lr "${LR}" \
     --num-workers "${NUM_WORKERS}" \
     --base-channels "${BASE_CHANNELS}" \
+    --num-classes "${NUM_CLASSES}" \
+    --p-uncond "${P_UNCOND}" \
     --seed "${SEED}" \
     --val-ratio "${VAL_RATIO}" \
     "$@"

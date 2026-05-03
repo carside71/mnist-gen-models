@@ -20,6 +20,9 @@ OUT_PATH="${OUT_PATH:-/workspace/outputs/flow/samples/flow_samples.png}"
 NUM_SAMPLES="${NUM_SAMPLES:-64}"
 STEPS="${STEPS:-100}"
 BASE_CHANNELS="${BASE_CHANNELS:-}"
+NUM_CLASSES="${NUM_CLASSES:-}"
+LABEL="${LABEL:-}"
+GUIDANCE_SCALE="${GUIDANCE_SCALE:-3.0}"
 SEED="${SEED:-42}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,12 +30,15 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 EXTRA_ARGS=()
 [[ -n "${BASE_CHANNELS}" ]] && EXTRA_ARGS+=(--base-channels "${BASE_CHANNELS}")
+[[ -n "${NUM_CLASSES}" ]] && EXTRA_ARGS+=(--num-classes "${NUM_CLASSES}")
+[[ -n "${LABEL}" ]] && EXTRA_ARGS+=(--label "${LABEL}")
 
 python "${PROJECT_ROOT}/src/sample_flow.py" \
     --checkpoint "${CHECKPOINT}" \
     --out-path "${OUT_PATH}" \
     --num-samples "${NUM_SAMPLES}" \
     --steps "${STEPS}" \
+    --guidance-scale "${GUIDANCE_SCALE}" \
     --seed "${SEED}" \
     "${EXTRA_ARGS[@]}" \
     "$@"

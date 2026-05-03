@@ -20,6 +20,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--num-workers", type=int, default=8)
     parser.add_argument("--base-channels", type=int, default=64)
+    parser.add_argument("--num-classes", type=int, default=10, help="0 で無条件モデル")
+    parser.add_argument("--p-uncond", type=float, default=0.1, help="CFG学習時のラベルドロップ確率")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--val-ratio", type=float, default=0.1)
 
@@ -45,7 +47,7 @@ def main() -> None:
         seed=args.seed,
     )
 
-    model = TimeConditionedUNet(base_channels=args.base_channels).to(device)
+    model = TimeConditionedUNet(base_channels=args.base_channels, num_classes=args.num_classes).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
 
     best_val_loss = float("inf")
@@ -57,10 +59,11 @@ def main() -> None:
 
         progress = tqdm(train_loader, desc=f"epoch {epoch}/{args.epochs}")
 
-        for images, _ in progress:
+        for images, labels in progress:
             images = images.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True) if args.num_classes > 0 else None
 
-            loss = flow_matching_loss(model, images)
+            loss = flow_matching_loss(model, images, labels=labels, p_uncond=args.p_uncond)
 
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -79,9 +82,10 @@ def main() -> None:
         val_count = 0
         torch.manual_seed(epoch)
         with torch.no_grad():
-            for images, _ in val_loader:
+            for images, labels in val_loader:
                 images = images.to(device, non_blocking=True)
-                loss = flow_matching_loss(model, images)
+                labels = labels.to(device, non_blocking=True) if args.num_classes > 0 else None
+                loss = flow_matching_loss(model, images, labels=labels, p_uncond=args.p_uncond)
                 val_total += loss.item() * images.size(0)
                 val_count += images.size(0)
         val_loss = val_total / val_count
@@ -91,6 +95,7 @@ def main() -> None:
         extra = {
             "model_config": {
                 "base_channels": args.base_channels,
+                "num_classes": args.num_classes,
             },
             "train_loss": train_loss,
         }

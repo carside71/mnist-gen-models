@@ -76,8 +76,17 @@ class TimeConditionedUNet(nn.Module):
     Diffusionでは「ノイズ予測」、Flow Matchingでは「速度場予測」として同じ出力を使う。
     """
 
-    def __init__(self, in_channels: int = 1, base_channels: int = 64, time_dim: int = 256):
+    def __init__(
+        self,
+        in_channels: int = 1,
+        base_channels: int = 64,
+        time_dim: int = 256,
+        num_classes: int = 0,
+    ):
         super().__init__()
+
+        self.num_classes = num_classes
+        self.null_label_idx = num_classes  # 無条件トークンとして使うインデックス
 
         self.time_mlp = nn.Sequential(
             SinusoidalTimeEmbedding(time_dim),
@@ -85,6 +94,18 @@ class TimeConditionedUNet(nn.Module):
             nn.SiLU(),
             nn.Linear(time_dim, time_dim),
         )
+
+        if num_classes > 0:
+            # +1 は CFG 用の "無条件" 埋め込み
+            self.label_emb = nn.Embedding(num_classes + 1, time_dim)
+            self.label_mlp = nn.Sequential(
+                nn.Linear(time_dim, time_dim),
+                nn.SiLU(),
+                nn.Linear(time_dim, time_dim),
+            )
+        else:
+            self.label_emb = None
+            self.label_mlp = None
 
         self.in_conv = nn.Conv2d(in_channels, base_channels, kernel_size=3, padding=1)
 
@@ -102,8 +123,13 @@ class TimeConditionedUNet(nn.Module):
         self.out_norm = nn.GroupNorm(num_groups=8, num_channels=base_channels)
         self.out_conv = nn.Conv2d(base_channels, in_channels, kernel_size=3, padding=1)
 
-    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, t: torch.Tensor, y: torch.Tensor | None = None) -> torch.Tensor:
         time_emb = self.time_mlp(t)
+
+        if self.label_emb is not None:
+            if y is None:
+                y = torch.full((x.size(0),), self.null_label_idx, device=x.device, dtype=torch.long)
+            time_emb = time_emb + self.label_mlp(self.label_emb(y))
 
         x = self.in_conv(x)
 

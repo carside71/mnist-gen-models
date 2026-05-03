@@ -63,8 +63,10 @@ def diffusion_loss(
     model: nn.Module,
     x_start: torch.Tensor,
     schedule: DiffusionSchedule,
+    labels: torch.Tensor | None = None,
+    p_uncond: float = 0.1,
 ) -> torch.Tensor:
-    """DDPMの基本的なノイズ予測損失。"""
+    """DDPMの基本的なノイズ予測損失。CFG学習のためラベルを確率的にドロップする。"""
 
     batch_size = x_start.size(0)
     device = x_start.device
@@ -74,7 +76,13 @@ def diffusion_loss(
 
     # モデルには [0, 1] に正規化した時刻を渡す。
     t_normalized = t.float() / (schedule.timesteps - 1)
-    predicted_noise = model(x_t, t_normalized)
+
+    if labels is not None and getattr(model, "label_emb", None) is not None:
+        drop_mask = torch.rand(batch_size, device=device) < p_uncond
+        y = torch.where(drop_mask, torch.full_like(labels, model.null_label_idx), labels)
+        predicted_noise = model(x_t, t_normalized, y)
+    else:
+        predicted_noise = model(x_t, t_normalized)
 
     return F.mse_loss(predicted_noise, noise)
 
@@ -85,17 +93,29 @@ def sample_ddpm(
     schedule: DiffusionSchedule,
     shape: tuple[int, int, int, int],
     device: torch.device,
+    labels: torch.Tensor | None = None,
+    guidance_scale: float = 0.0,
 ) -> torch.Tensor:
-    """DDPMの逆過程で画像を生成する。"""
+    """DDPMの逆過程で画像を生成する。labelsとguidance_scaleでCFGによる条件付き生成。"""
 
     model.eval()
     x = torch.randn(shape, device=device)
+
+    use_cfg = labels is not None and guidance_scale > 0.0 and getattr(model, "label_emb", None) is not None
+    null_y = None
+    if use_cfg:
+        null_y = torch.full_like(labels, model.null_label_idx)
 
     for i in reversed(range(schedule.timesteps)):
         t = torch.full((shape[0],), i, device=device, dtype=torch.long)
         t_normalized = t.float() / (schedule.timesteps - 1)
 
-        predicted_noise = model(x, t_normalized)
+        if use_cfg:
+            eps_cond = model(x, t_normalized, labels)
+            eps_uncond = model(x, t_normalized, null_y)
+            predicted_noise = (1.0 + guidance_scale) * eps_cond - guidance_scale * eps_uncond
+        else:
+            predicted_noise = model(x, t_normalized, labels)
 
         beta_t = extract(schedule.betas, t, x.shape)
         alpha_t = extract(schedule.alphas, t, x.shape)

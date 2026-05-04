@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from sklearn.decomposition import PCA
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from torchvision import datasets
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -34,6 +35,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--guidance-scale", type=float, default=3.0)
     parser.add_argument("--dim", type=int, choices=[2, 3], default=2)
+    parser.add_argument("--pca-dim", type=int, default=50,
+                        help="LDA に渡す前段の PCA 次元数（上位N軸）。")
     parser.add_argument("--base-channels", type=int, default=None)
     parser.add_argument("--num-classes", type=int, default=None)
     parser.add_argument("--seed", type=int, default=42)
@@ -141,14 +144,45 @@ def fit_pca_and_plot(
     data_traj: np.ndarray,
     data_labels: np.ndarray,
     dim: int,
+    pca_dim: int,
     out_path: Path,
 ) -> None:
     n, T, D = gen_traj.shape
     m = data_traj.shape[0]
 
-    flat = np.concatenate([gen_traj.reshape(n * T, D), data_traj.reshape(m * T, D)], axis=0)
-    pca = PCA(n_components=dim)
-    proj = pca.fit_transform(flat)
+    # 座標系は「実データ画像」と「ランダムノイズ」のみから決定する。
+    # data_traj[:, 0]   は内挿時に引いたノイズ x0、
+    # data_traj[:, -1]  は実データ画像 x1。
+    noise_feat = data_traj[:, 0, :]   # [m, D]
+    real_feat = data_traj[:, -1, :]   # [m, D]
+    fit_feat = np.concatenate([noise_feat, real_feat], axis=0)  # [2m, D]
+    NOISE_LABEL = -1
+    fit_labels = np.concatenate([
+        np.full(m, NOISE_LABEL),
+        data_labels if data_labels is not None else np.full(m, 0),
+    ])
+
+    pca_n = max(dim, min(pca_dim, fit_feat.shape[0], fit_feat.shape[1]))
+    pca = PCA(n_components=pca_n)
+    pca.fit(fit_feat)
+    fit_pca = pca.transform(fit_feat)
+
+    all_states = np.concatenate([gen_traj.reshape(n * T, D), data_traj.reshape(m * T, D)], axis=0)
+    all_pca = pca.transform(all_states)
+
+    unique = np.unique(fit_labels)
+    lda_used = False
+    explained: np.ndarray
+    if len(unique) >= dim + 1:
+        lda = LinearDiscriminantAnalysis(n_components=dim)
+        lda.fit(fit_pca, fit_labels)
+        proj = lda.transform(all_pca)
+        explained = lda.explained_variance_ratio_
+        lda_used = True
+    else:
+        proj = all_pca[:, :dim]
+        explained = pca.explained_variance_ratio_[:dim]
+
     gen_proj = proj[: n * T].reshape(n, T, dim)
     data_proj = proj[n * T :].reshape(m, T, dim)
 
@@ -165,17 +199,18 @@ def fit_pca_and_plot(
     label_to_color = {lb: cmap(i % 10) for i, lb in enumerate(unique_labels)}
     default_color = "tab:gray"
 
-    def plot_line(ax, pts, color, alpha, linestyle, label=None):
+    def plot_line(ax, pts, color, alpha, linestyle, label=None, marker_alpha=None):
+        ma = alpha if marker_alpha is None else marker_alpha
         if dim == 3:
             ax.plot(pts[:, 0], pts[:, 1], pts[:, 2], color=color, alpha=alpha,
                     linewidth=1.0, linestyle=linestyle, label=label)
-            ax.scatter(pts[0, 0], pts[0, 1], pts[0, 2], color=color, marker="o", s=20)
-            ax.scatter(pts[-1, 0], pts[-1, 1], pts[-1, 2], color=color, marker="*", s=60)
+            ax.scatter(pts[0, 0], pts[0, 1], pts[0, 2], color=color, marker="o", s=20, alpha=ma)
+            ax.scatter(pts[-1, 0], pts[-1, 1], pts[-1, 2], color=color, marker="*", s=60, alpha=ma)
         else:
             ax.plot(pts[:, 0], pts[:, 1], color=color, alpha=alpha,
                     linewidth=1.0, linestyle=linestyle, label=label)
-            ax.scatter(pts[0, 0], pts[0, 1], color=color, marker="o", s=20)
-            ax.scatter(pts[-1, 0], pts[-1, 1], color=color, marker="*", s=60)
+            ax.scatter(pts[0, 0], pts[0, 1], color=color, marker="o", s=20, alpha=ma)
+            ax.scatter(pts[-1, 0], pts[-1, 1], color=color, marker="*", s=60, alpha=ma)
 
     seen_label_keys: set[tuple[int, str]] = set()
 
@@ -195,15 +230,16 @@ def fit_pca_and_plot(
     for j in range(m):
         lb = int(data_labels[j]) if data_labels is not None else None
         color = label_to_color.get(lb, default_color) if lb is not None else default_color
-        plot_line(ax, data_proj[j], color=color, alpha=0.85, linestyle="--",
-                  label=legend_label(lb, "data"))
+        plot_line(ax, data_proj[j], color=color, alpha=0.25, linestyle="--",
+                  label=legend_label(lb, "data"), marker_alpha=0.35)
 
-    var = pca.explained_variance_ratio_
-    ax.set_xlabel(f"PC1 ({var[0] * 100:.1f}%)")
-    ax.set_ylabel(f"PC2 ({var[1] * 100:.1f}%)")
+    axis_prefix = "LD" if lda_used else "PC"
+    ax.set_xlabel(f"{axis_prefix}1 ({explained[0] * 100:.1f}%)")
+    ax.set_ylabel(f"{axis_prefix}2 ({explained[1] * 100:.1f}%)")
     if dim == 3:
-        ax.set_zlabel(f"PC3 ({var[2] * 100:.1f}%)")
-    ax.set_title("Flow Matching trajectories (PCA)\nO=t=0 (noise),  *=t=1")
+        ax.set_zlabel(f"{axis_prefix}3 ({explained[2] * 100:.1f}%)")
+    method = f"PCA({pca_n})→LDA" if lda_used else "PCA"
+    ax.set_title(f"Flow Matching trajectories ({method})\nO=t=0 (noise),  *=t=1")
     ax.legend(loc="best")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -237,7 +273,7 @@ def main() -> None:
     print(f"data trajectories: {data_traj.shape}")
 
     out_path = Path(args.out_path)
-    fit_pca_and_plot(gen_traj, gen_labels, data_traj, data_labels, args.dim, out_path)
+    fit_pca_and_plot(gen_traj, gen_labels, data_traj, data_labels, args.dim, args.pca_dim, out_path)
     print(f"saved: {out_path}")
 
 

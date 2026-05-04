@@ -155,20 +155,48 @@ def fit_pca_and_plot(
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection="3d") if dim == 3 else fig.add_subplot(111)
 
-    def plot_line(ax, pts, color, alpha, label=None):
+    all_labels: list[int] = []
+    if gen_labels is not None:
+        all_labels.extend(gen_labels.tolist())
+    if data_labels is not None:
+        all_labels.extend(data_labels.tolist())
+    unique_labels = sorted(set(all_labels)) if all_labels else []
+    cmap = plt.get_cmap("tab10")
+    label_to_color = {lb: cmap(i % 10) for i, lb in enumerate(unique_labels)}
+    default_color = "tab:gray"
+
+    def plot_line(ax, pts, color, alpha, linestyle, label=None):
         if dim == 3:
-            ax.plot(pts[:, 0], pts[:, 1], pts[:, 2], color=color, alpha=alpha, linewidth=1.0, label=label)
+            ax.plot(pts[:, 0], pts[:, 1], pts[:, 2], color=color, alpha=alpha,
+                    linewidth=1.0, linestyle=linestyle, label=label)
             ax.scatter(pts[0, 0], pts[0, 1], pts[0, 2], color=color, marker="o", s=20)
             ax.scatter(pts[-1, 0], pts[-1, 1], pts[-1, 2], color=color, marker="*", s=60)
         else:
-            ax.plot(pts[:, 0], pts[:, 1], color=color, alpha=alpha, linewidth=1.0, label=label)
+            ax.plot(pts[:, 0], pts[:, 1], color=color, alpha=alpha,
+                    linewidth=1.0, linestyle=linestyle, label=label)
             ax.scatter(pts[0, 0], pts[0, 1], color=color, marker="o", s=20)
             ax.scatter(pts[-1, 0], pts[-1, 1], color=color, marker="*", s=60)
 
+    seen_label_keys: set[tuple[int, str]] = set()
+
+    def legend_label(lb: int | None, kind: str) -> str | None:
+        key = (-1 if lb is None else int(lb), kind)
+        if key in seen_label_keys:
+            return None
+        seen_label_keys.add(key)
+        suffix = "gen" if kind == "gen" else "data"
+        return f"label {lb} ({suffix})" if lb is not None else f"unlabeled ({suffix})"
+
     for i in range(n):
-        plot_line(ax, gen_proj[i], color="tab:blue", alpha=0.7, label="generated" if i == 0 else None)
+        lb = int(gen_labels[i]) if gen_labels is not None else None
+        color = label_to_color.get(lb, default_color) if lb is not None else default_color
+        plot_line(ax, gen_proj[i], color=color, alpha=0.85, linestyle="-",
+                  label=legend_label(lb, "gen"))
     for j in range(m):
-        plot_line(ax, data_proj[j], color="tab:orange", alpha=0.7, label="data interp" if j == 0 else None)
+        lb = int(data_labels[j]) if data_labels is not None else None
+        color = label_to_color.get(lb, default_color) if lb is not None else default_color
+        plot_line(ax, data_proj[j], color=color, alpha=0.85, linestyle="--",
+                  label=legend_label(lb, "data"))
 
     var = pca.explained_variance_ratio_
     ax.set_xlabel(f"PC1 ({var[0] * 100:.1f}%)")

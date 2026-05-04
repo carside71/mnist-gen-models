@@ -21,6 +21,7 @@ NUM_SAMPLES="${NUM_SAMPLES:-64}"
 BASE_CHANNELS="${BASE_CHANNELS:-}"
 TIMESTEPS="${TIMESTEPS:-}"
 NUM_CLASSES="${NUM_CLASSES:-}"
+DATASET="${DATASET:-}"
 LABEL="${LABEL:-}"
 GUIDANCE_SCALE="${GUIDANCE_SCALE:-3.0}"
 SEED="${SEED:-42}"
@@ -32,6 +33,7 @@ EXTRA_ARGS=()
 [[ -n "${BASE_CHANNELS}" ]] && EXTRA_ARGS+=(--base-channels "${BASE_CHANNELS}")
 [[ -n "${TIMESTEPS}" ]] && EXTRA_ARGS+=(--timesteps "${TIMESTEPS}")
 [[ -n "${NUM_CLASSES}" ]] && EXTRA_ARGS+=(--num-classes "${NUM_CLASSES}")
+[[ -n "${DATASET}" ]] && EXTRA_ARGS+=(--dataset "${DATASET}")
 [[ -n "${LABEL}" ]] && EXTRA_ARGS+=(--label "${LABEL}")
 
 python "${PROJECT_ROOT}/src/sample_diffusion.py" \

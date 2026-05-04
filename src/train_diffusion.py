@@ -4,7 +4,7 @@ from pathlib import Path
 import torch
 from tqdm import tqdm
 
-from mnist_gen.data import get_mnist_train_val_dataloaders
+from mnist_gen.data import DATASET_SPECS, get_train_val_dataloaders
 from mnist_gen.diffusion import DiffusionSchedule, diffusion_loss
 from mnist_gen.models import TimeConditionedUNet
 from mnist_gen.utils import ensure_dir, get_device, save_checkpoint, save_config, set_seed
@@ -13,6 +13,7 @@ from mnist_gen.utils import ensure_dir, get_device, save_checkpoint, save_config
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train a DDPM-style diffusion model on MNIST.")
 
+    parser.add_argument("--dataset", type=str, default="mnist", choices=["mnist", "cifar10"])
     parser.add_argument("--data-dir", type=str, default="/workspace/datasets/mnist")
     parser.add_argument("--out-dir", type=str, default="/workspace/outputs/diffusion")
     parser.add_argument("--epochs", type=int, default=20)
@@ -40,7 +41,10 @@ def main() -> None:
     checkpoint_dir = ensure_dir(out_dir / "checkpoints")
     save_config(args, out_dir / "config.json")
 
-    train_loader, val_loader = get_mnist_train_val_dataloaders(
+    spec = DATASET_SPECS[args.dataset]
+
+    train_loader, val_loader = get_train_val_dataloaders(
+        dataset=args.dataset,
         data_dir=args.data_dir,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
@@ -48,7 +52,11 @@ def main() -> None:
         seed=args.seed,
     )
 
-    model = TimeConditionedUNet(base_channels=args.base_channels, num_classes=args.num_classes).to(device)
+    model = TimeConditionedUNet(
+        in_channels=spec["in_channels"],
+        base_channels=args.base_channels,
+        num_classes=args.num_classes,
+    ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
     schedule = DiffusionSchedule.create(timesteps=args.timesteps, device=device)
 
@@ -98,6 +106,9 @@ def main() -> None:
             "model_config": {
                 "base_channels": args.base_channels,
                 "num_classes": args.num_classes,
+                "in_channels": spec["in_channels"],
+                "image_size": spec["image_size"],
+                "dataset": args.dataset,
             },
             "diffusion_config": {
                 "timesteps": args.timesteps,

@@ -9,11 +9,10 @@ import numpy as np
 import torch
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from torchvision import datasets
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from mnist_gen.data import _mnist_transform
+from mnist_gen.data import DATASET_SPECS, get_raw_dataset
 from mnist_gen.models import TimeConditionedUNet
 from mnist_gen.utils import get_device, load_model_weights, set_seed
 
@@ -22,7 +21,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Visualize Flow Matching trajectories via PCA.")
     parser.add_argument("--checkpoint", type=str, default="/workspace/outputs/flow/checkpoints/best.pt")
     parser.add_argument("--out-path", type=str, default="/workspace/outputs/flow/trajectories/flow_traj.png")
-    parser.add_argument("--data-dir", type=str, default="/workspace/datasets/mnist")
+    parser.add_argument("--dataset", type=str, default=None, choices=[None, "mnist", "cifar10"])
+    parser.add_argument("--data-dir", type=str, default=None)
     parser.add_argument("--num-gen", type=int, default=16)
     parser.add_argument("--num-data", type=int, default=16)
     parser.add_argument("--steps", type=int, default=50)
@@ -44,16 +44,28 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_model(
-    checkpoint_path: str, device: torch.device, base_channels_arg: int | None, num_classes_arg: int | None
-) -> tuple[TimeConditionedUNet, int]:
+    checkpoint_path: str,
+    device: torch.device,
+    base_channels_arg: int | None,
+    num_classes_arg: int | None,
+    dataset_arg: str | None,
+) -> tuple[TimeConditionedUNet, int, str, int, int]:
     checkpoint = torch.load(checkpoint_path, map_location=device)
     model_config = checkpoint.get("model_config", {})
     base_channels = base_channels_arg or model_config.get("base_channels", 64)
     num_classes = num_classes_arg if num_classes_arg is not None else model_config.get("num_classes", 0)
-    model = TimeConditionedUNet(base_channels=base_channels, num_classes=num_classes).to(device)
+    dataset = dataset_arg or model_config.get("dataset", "mnist")
+    spec = DATASET_SPECS[dataset]
+    in_channels = model_config.get("in_channels", spec["in_channels"])
+    image_size = model_config.get("image_size", spec["image_size"])
+    model = TimeConditionedUNet(
+        in_channels=in_channels,
+        base_channels=base_channels,
+        num_classes=num_classes,
+    ).to(device)
     load_model_weights(model, checkpoint_path, device)
     model.eval()
-    return model, num_classes
+    return model, num_classes, dataset, in_channels, image_size
 
 
 def assign_labels(
@@ -73,9 +85,11 @@ def generate_trajectories(
     labels: torch.Tensor | None,
     guidance_scale: float,
     device: torch.device,
+    in_channels: int,
+    image_size: int,
 ) -> tuple[np.ndarray, np.ndarray | None]:
-    """生成軌道を返す。shape: [n, steps+1, 784]。labels が None でなければ第2戻り値はラベル配列。"""
-    x = torch.randn(n, 1, 28, 28, device=device)
+    """生成軌道を返す。shape: [n, steps+1, C*H*W]。labels が None でなければ第2戻り値はラベル配列。"""
+    x = torch.randn(n, in_channels, image_size, image_size, device=device)
     use_cfg = labels is not None and guidance_scale > 0.0 and getattr(model, "label_emb", None) is not None
     null_y = torch.full_like(labels, model.null_label_idx) if use_cfg else None
 
@@ -98,10 +112,10 @@ def generate_trajectories(
 
 
 def sample_data_images(
-    data_dir: str, target_labels: list[int] | None, m: int, seed: int
+    dataset_name: str, data_dir: str, target_labels: list[int] | None, m: int, seed: int
 ) -> tuple[torch.Tensor, np.ndarray]:
-    dataset = datasets.MNIST(root=data_dir, train=True, download=True, transform=_mnist_transform())
-    targets = dataset.targets
+    dataset = get_raw_dataset(dataset_name, data_dir, train=True)
+    targets = torch.as_tensor(dataset.targets)
     if target_labels is not None:
         mask = torch.zeros_like(targets, dtype=torch.bool)
         for lb in target_labels:
@@ -123,7 +137,7 @@ def sample_data_images(
         img, lb = dataset[idx]
         images.append(img)
         labels.append(lb)
-    x1 = torch.stack(images, dim=0)  # [m, 1, 28, 28], in [-1, 1]
+    x1 = torch.stack(images, dim=0)  # [m, C, H, W], in [-1, 1]
     return x1, np.array(labels)
 
 
@@ -134,7 +148,7 @@ def make_data_trajectories(x1: torch.Tensor, steps: int) -> np.ndarray:
     ts = torch.linspace(0.0, 1.0, steps + 1).view(1, steps + 1, 1, 1, 1)
     x0_b = x0.unsqueeze(1)
     x1_b = x1.unsqueeze(1)
-    xt = (1.0 - ts) * x0_b + ts * x1_b  # [m, steps+1, 1, 28, 28]
+    xt = (1.0 - ts) * x0_b + ts * x1_b  # [m, steps+1, C, H, W]
     return xt.reshape(m, steps + 1, -1).numpy()
 
 
@@ -254,7 +268,10 @@ def main() -> None:
     device = get_device()
     print(f"device: {device}")
 
-    model, num_classes = load_model(args.checkpoint, device, args.base_channels, args.num_classes)
+    model, num_classes, dataset_name, in_channels, image_size = load_model(
+        args.checkpoint, device, args.base_channels, args.num_classes, args.dataset
+    )
+    data_dir = args.data_dir or f"/workspace/datasets/{dataset_name}"
 
     target_labels = args.labels
     if target_labels is not None and num_classes > 0:
@@ -264,11 +281,12 @@ def main() -> None:
 
     gen_label_tensor = assign_labels(target_labels, args.num_gen, device, num_classes)
     gen_traj, gen_labels = generate_trajectories(
-        model, args.num_gen, args.steps, gen_label_tensor, args.guidance_scale, device
+        model, args.num_gen, args.steps, gen_label_tensor, args.guidance_scale, device,
+        in_channels, image_size,
     )
     print(f"generated trajectories: {gen_traj.shape}")
 
-    x1, data_labels = sample_data_images(args.data_dir, target_labels, args.num_data, args.seed)
+    x1, data_labels = sample_data_images(dataset_name, data_dir, target_labels, args.num_data, args.seed)
     data_traj = make_data_trajectories(x1, args.steps)
     print(f"data trajectories: {data_traj.shape}")
 

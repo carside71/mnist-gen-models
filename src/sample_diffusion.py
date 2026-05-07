@@ -16,6 +16,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out-path", type=str, default="/workspace/outputs/diffusion/samples/diffusion_samples.png")
     parser.add_argument("--num-samples", type=int, default=64)
     parser.add_argument("--base-channels", type=int, default=None)
+    parser.add_argument("--depth", type=int, default=None)
     parser.add_argument("--timesteps", type=int, default=None)
     parser.add_argument("--num-classes", type=int, default=None)
     parser.add_argument("--dataset", type=str, default=None, choices=[None, "mnist", "cifar10"])
@@ -39,6 +40,7 @@ def main() -> None:
     diffusion_config = checkpoint.get("diffusion_config", {})
 
     base_channels = args.base_channels or model_config.get("base_channels", 64)
+    depth = args.depth or model_config.get("depth", 2)
     timesteps = args.timesteps or diffusion_config.get("timesteps", 1000)
     num_classes = args.num_classes if args.num_classes is not None else model_config.get("num_classes", 0)
     dataset = args.dataset or model_config.get("dataset", "mnist")
@@ -50,6 +52,7 @@ def main() -> None:
         in_channels=in_channels,
         base_channels=base_channels,
         num_classes=num_classes,
+        depth=depth,
     ).to(device)
     load_model_weights(model, args.checkpoint, device)
 

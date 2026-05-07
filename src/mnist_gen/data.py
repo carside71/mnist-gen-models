@@ -2,7 +2,6 @@ import torch
 from torch.utils.data import DataLoader, Dataset, random_split
 from torchvision import datasets, transforms
 
-
 DATASET_SPECS = {
     "mnist": {"in_channels": 1, "image_size": 28, "num_classes": 10},
     "cifar10": {"in_channels": 3, "image_size": 32, "num_classes": 10},
@@ -164,9 +163,7 @@ def _split_train_val_loaders(
     val_size = int(len(full_dataset) * val_ratio)
     train_size = len(full_dataset) - val_size
     generator = torch.Generator().manual_seed(seed)
-    train_subset, val_subset = random_split(
-        full_dataset, [train_size, val_size], generator=generator
-    )
+    train_subset, val_subset = random_split(full_dataset, [train_size, val_size], generator=generator)
 
     train_loader = DataLoader(
         train_subset,
@@ -210,11 +207,7 @@ def get_train_val_dataloaders(
     seed: int = 42,
 ) -> tuple[DataLoader, DataLoader]:
     if dataset == "mnist":
-        return get_mnist_train_val_dataloaders(
-            data_dir, batch_size, num_workers, val_ratio=val_ratio, seed=seed
-        )
+        return get_mnist_train_val_dataloaders(data_dir, batch_size, num_workers, val_ratio=val_ratio, seed=seed)
     if dataset == "cifar10":
-        return get_cifar10_train_val_dataloaders(
-            data_dir, batch_size, num_workers, val_ratio=val_ratio, seed=seed
-        )
+        return get_cifar10_train_val_dataloaders(data_dir, batch_size, num_workers, val_ratio=val_ratio, seed=seed)
     raise ValueError(f"unknown dataset: {dataset}")

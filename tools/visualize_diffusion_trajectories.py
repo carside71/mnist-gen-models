@@ -37,6 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dim", type=int, choices=[2, 3], default=2)
     parser.add_argument("--pca-dim", type=int, default=50)
     parser.add_argument("--base-channels", type=int, default=None)
+    parser.add_argument("--depth", type=int, default=None)
     parser.add_argument("--num-classes", type=int, default=None)
     parser.add_argument("--seed", type=int, default=42)
     return parser.parse_args()
@@ -48,10 +49,12 @@ def load_model(
     base_channels_arg: int | None,
     num_classes_arg: int | None,
     dataset_arg: str | None,
+    depth_arg: int | None,
 ) -> tuple[TimeConditionedUNet, int, str, int, int]:
     checkpoint = torch.load(checkpoint_path, map_location=device)
     model_config = checkpoint.get("model_config", {})
     base_channels = base_channels_arg or model_config.get("base_channels", 64)
+    depth = depth_arg or model_config.get("depth", 2)
     num_classes = num_classes_arg if num_classes_arg is not None else model_config.get("num_classes", 0)
     dataset = dataset_arg or model_config.get("dataset", "mnist")
     spec = DATASET_SPECS[dataset]
@@ -61,6 +64,7 @@ def load_model(
         in_channels=in_channels,
         base_channels=base_channels,
         num_classes=num_classes,
+        depth=depth,
     ).to(device)
     load_model_weights(model, checkpoint_path, device)
     model.eval()
@@ -310,7 +314,7 @@ def main() -> None:
     print(f"device: {device}")
 
     model, num_classes, dataset_name, in_channels, image_size = load_model(
-        args.checkpoint, device, args.base_channels, args.num_classes, args.dataset
+        args.checkpoint, device, args.base_channels, args.num_classes, args.dataset, args.depth
     )
     data_dir = args.data_dir or f"/workspace/datasets/{dataset_name}"
     schedule = DiffusionSchedule.create(timesteps=args.timesteps, device=device)

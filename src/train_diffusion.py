@@ -21,6 +21,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--num-workers", type=int, default=8)
     parser.add_argument("--base-channels", type=int, default=64)
+    parser.add_argument("--depth", type=int, default=2, help="U-Net のダウンサンプリング段数")
     parser.add_argument("--timesteps", type=int, default=1000)
     parser.add_argument("--num-classes", type=int, default=10, help="0 で無条件モデル")
     parser.add_argument("--p-uncond", type=float, default=0.1, help="CFG学習時のラベルドロップ確率")
@@ -56,6 +57,7 @@ def main() -> None:
         in_channels=spec["in_channels"],
         base_channels=args.base_channels,
         num_classes=args.num_classes,
+        depth=args.depth,
     ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
     schedule = DiffusionSchedule.create(timesteps=args.timesteps, device=device)
@@ -105,6 +107,7 @@ def main() -> None:
         extra = {
             "model_config": {
                 "base_channels": args.base_channels,
+                "depth": args.depth,
                 "num_classes": args.num_classes,
                 "in_channels": spec["in_channels"],
                 "image_size": spec["image_size"],

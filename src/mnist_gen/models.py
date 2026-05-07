@@ -82,8 +82,21 @@ class TimeConditionedUNet(nn.Module):
         base_channels: int = 64,
         time_dim: int = 256,
         num_classes: int = 0,
+        depth: int = 2,
+        channel_mults: tuple[int, ...] | None = None,
     ):
         super().__init__()
+
+        if depth < 1:
+            raise ValueError(f"depth must be >= 1, got {depth}")
+
+        if channel_mults is None:
+            channel_mults = tuple(2**i for i in range(depth + 1))
+        elif len(channel_mults) != depth + 1:
+            raise ValueError(f"channel_mults must have length depth+1 ({depth + 1}), got {len(channel_mults)}")
+
+        self.depth = depth
+        self.channel_mults = tuple(channel_mults)
 
         self.num_classes = num_classes
         self.null_label_idx = num_classes  # 無条件トークンとして使うインデックス
@@ -109,16 +122,20 @@ class TimeConditionedUNet(nn.Module):
 
         self.in_conv = nn.Conv2d(in_channels, base_channels, kernel_size=3, padding=1)
 
-        self.block1 = ResidualBlock(base_channels, base_channels, time_dim)
-        self.down1 = ResidualBlock(base_channels, base_channels * 2, time_dim)
+        channels = [base_channels * m for m in self.channel_mults]
 
-        self.block2 = ResidualBlock(base_channels * 2, base_channels * 2, time_dim)
-        self.down2 = ResidualBlock(base_channels * 2, base_channels * 4, time_dim)
+        self.skip_blocks = nn.ModuleList()
+        self.down_blocks = nn.ModuleList()
+        for i in range(depth):
+            self.skip_blocks.append(ResidualBlock(channels[i], channels[i], time_dim))
+            self.down_blocks.append(ResidualBlock(channels[i], channels[i + 1], time_dim))
 
-        self.middle = ResidualBlock(base_channels * 4, base_channels * 4, time_dim)
+        self.middle = ResidualBlock(channels[-1], channels[-1], time_dim)
 
-        self.up2 = ResidualBlock(base_channels * 4 + base_channels * 2, base_channels * 2, time_dim)
-        self.up1 = ResidualBlock(base_channels * 2 + base_channels, base_channels, time_dim)
+        self.up_blocks = nn.ModuleList()
+        for i in reversed(range(depth)):
+            # skip との concat 後を channels[i] に縮約
+            self.up_blocks.append(ResidualBlock(channels[i + 1] + channels[i], channels[i], time_dim))
 
         self.out_norm = nn.GroupNorm(num_groups=8, num_channels=base_channels)
         self.out_conv = nn.Conv2d(base_channels, in_channels, kernel_size=3, padding=1)
@@ -133,22 +150,18 @@ class TimeConditionedUNet(nn.Module):
 
         x = self.in_conv(x)
 
-        skip1 = self.block1(x, time_emb)  # [B, C, 28, 28]
-        x = F.avg_pool2d(skip1, kernel_size=2)  # [B, C, 14, 14]
-        x = self.down1(x, time_emb)
-
-        skip2 = self.block2(x, time_emb)  # [B, 2C, 14, 14]
-        x = F.avg_pool2d(skip2, kernel_size=2)  # [B, 2C, 7, 7]
-        x = self.down2(x, time_emb)
+        skips: list[torch.Tensor] = []
+        for skip_block, down_block in zip(self.skip_blocks, self.down_blocks, strict=True):
+            skip = skip_block(x, time_emb)
+            skips.append(skip)
+            x = F.avg_pool2d(skip, kernel_size=2)
+            x = down_block(x, time_emb)
 
         x = self.middle(x, time_emb)
 
-        x = F.interpolate(x, size=skip2.shape[-2:], mode="nearest")
-        x = torch.cat([x, skip2], dim=1)
-        x = self.up2(x, time_emb)
-
-        x = F.interpolate(x, size=skip1.shape[-2:], mode="nearest")
-        x = torch.cat([x, skip1], dim=1)
-        x = self.up1(x, time_emb)
+        for up_block, skip in zip(self.up_blocks, reversed(skips), strict=True):
+            x = F.interpolate(x, size=skip.shape[-2:], mode="nearest")
+            x = torch.cat([x, skip], dim=1)
+            x = up_block(x, time_emb)
 
         return self.out_conv(F.silu(self.out_norm(x)))

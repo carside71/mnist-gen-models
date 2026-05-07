@@ -12,7 +12,12 @@ set -euo pipefail
 # 個別に上書きしたい場合は以下のように指定できます。
 #   例) scripts/train_flow.sh --epochs 50 --lr 1e-4
 
-DATA_DIR="${DATA_DIR:-/workspace/datasets/mnist}"
+DATASET="${DATASET:-mnist}"
+if [ "${DATASET}" = "cifar10" ]; then
+    DATA_DIR="${DATA_DIR:-/workspace/datasets/cifar10}"
+else
+    DATA_DIR="${DATA_DIR:-/workspace/datasets/mnist}"
+fi
 OUT_DIR="${OUT_DIR:-/workspace/outputs/flow}"
 EPOCHS="${EPOCHS:-20}"
 BATCH_SIZE="${BATCH_SIZE:-256}"
@@ -28,6 +33,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 python "${PROJECT_ROOT}/src/train_flow.py" \
+    --dataset "${DATASET}" \
     --data-dir "${DATA_DIR}" \
     --out-dir "${OUT_DIR}" \
     --epochs "${EPOCHS}" \

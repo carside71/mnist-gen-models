@@ -21,6 +21,7 @@ NUM_SAMPLES="${NUM_SAMPLES:-64}"
 STEPS="${STEPS:-100}"
 BASE_CHANNELS="${BASE_CHANNELS:-}"
 NUM_CLASSES="${NUM_CLASSES:-}"
+DATASET="${DATASET:-}"
 LABEL="${LABEL:-}"
 GUIDANCE_SCALE="${GUIDANCE_SCALE:-3.0}"
 SEED="${SEED:-42}"
@@ -31,6 +32,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 EXTRA_ARGS=()
 [[ -n "${BASE_CHANNELS}" ]] && EXTRA_ARGS+=(--base-channels "${BASE_CHANNELS}")
 [[ -n "${NUM_CLASSES}" ]] && EXTRA_ARGS+=(--num-classes "${NUM_CLASSES}")
+[[ -n "${DATASET}" ]] && EXTRA_ARGS+=(--dataset "${DATASET}")
 [[ -n "${LABEL}" ]] && EXTRA_ARGS+=(--label "${LABEL}")
 
 python "${PROJECT_ROOT}/src/sample_flow.py" \

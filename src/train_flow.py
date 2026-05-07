@@ -4,7 +4,7 @@ from pathlib import Path
 import torch
 from tqdm import tqdm
 
-from mnist_gen.data import get_mnist_train_val_dataloaders
+from mnist_gen.data import DATASET_SPECS, get_train_val_dataloaders
 from mnist_gen.flow_matching import flow_matching_loss
 from mnist_gen.models import TimeConditionedUNet
 from mnist_gen.utils import ensure_dir, get_device, save_checkpoint, save_config, set_seed
@@ -13,6 +13,7 @@ from mnist_gen.utils import ensure_dir, get_device, save_checkpoint, save_config
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train a Flow Matching model on MNIST.")
 
+    parser.add_argument("--dataset", type=str, default="mnist", choices=["mnist", "cifar10"])
     parser.add_argument("--data-dir", type=str, default="/workspace/datasets/mnist")
     parser.add_argument("--out-dir", type=str, default="/workspace/outputs/flow")
     parser.add_argument("--epochs", type=int, default=20)
@@ -20,6 +21,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--num-workers", type=int, default=8)
     parser.add_argument("--base-channels", type=int, default=64)
+    parser.add_argument("--depth", type=int, default=2, help="U-Net のダウンサンプリング段数")
     parser.add_argument("--num-classes", type=int, default=10, help="0 で無条件モデル")
     parser.add_argument("--p-uncond", type=float, default=0.1, help="CFG学習時のラベルドロップ確率")
     parser.add_argument("--seed", type=int, default=42)
@@ -39,7 +41,10 @@ def main() -> None:
     checkpoint_dir = ensure_dir(out_dir / "checkpoints")
     save_config(args, out_dir / "config.json")
 
-    train_loader, val_loader = get_mnist_train_val_dataloaders(
+    spec = DATASET_SPECS[args.dataset]
+
+    train_loader, val_loader = get_train_val_dataloaders(
+        dataset=args.dataset,
         data_dir=args.data_dir,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
@@ -47,7 +52,12 @@ def main() -> None:
         seed=args.seed,
     )
 
-    model = TimeConditionedUNet(base_channels=args.base_channels, num_classes=args.num_classes).to(device)
+    model = TimeConditionedUNet(
+        in_channels=spec["in_channels"],
+        base_channels=args.base_channels,
+        num_classes=args.num_classes,
+        depth=args.depth,
+    ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
 
     best_val_loss = float("inf")
@@ -95,7 +105,11 @@ def main() -> None:
         extra = {
             "model_config": {
                 "base_channels": args.base_channels,
+                "depth": args.depth,
                 "num_classes": args.num_classes,
+                "in_channels": spec["in_channels"],
+                "image_size": spec["image_size"],
+                "dataset": args.dataset,
             },
             "train_loss": train_loss,
         }

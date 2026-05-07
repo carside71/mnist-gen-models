@@ -16,7 +16,12 @@ set -euo pipefail
 
 CHECKPOINT="${CHECKPOINT:-/workspace/outputs/diffusion/exp_02/checkpoints/best.pt}"
 OUT_PATH="${OUT_PATH:-/workspace/outputs/diffusion/trajectories/diffusion_traj.png}"
-DATA_DIR="${DATA_DIR:-/workspace/datasets/mnist}"
+DATASET="${DATASET:-mnist}"
+if [ "${DATASET}" = "cifar10" ]; then
+    DATA_DIR="${DATA_DIR:-/workspace/datasets/cifar10}"
+else
+    DATA_DIR="${DATA_DIR:-/workspace/datasets/mnist}"
+fi
 NUM_GEN="${NUM_GEN:-16}"
 NUM_DATA="${NUM_DATA:-16}"
 STEPS="${STEPS:-50}"
@@ -43,6 +48,7 @@ fi
 python "${PROJECT_ROOT}/tools/visualize_diffusion_trajectories.py" \
     --checkpoint "${CHECKPOINT}" \
     --out-path "${OUT_PATH}" \
+    --dataset "${DATASET}" \
     --data-dir "${DATA_DIR}" \
     --num-gen "${NUM_GEN}" \
     --num-data "${NUM_DATA}" \

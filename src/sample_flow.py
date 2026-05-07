@@ -3,6 +3,7 @@ from pathlib import Path
 
 import torch
 
+from mnist_gen.data import DATASET_SPECS
 from mnist_gen.flow_matching import sample_flow
 from mnist_gen.models import TimeConditionedUNet
 from mnist_gen.utils import get_device, load_model_weights, save_samples_grid, set_seed
@@ -16,7 +17,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-samples", type=int, default=64)
     parser.add_argument("--steps", type=int, default=100)
     parser.add_argument("--base-channels", type=int, default=None)
+    parser.add_argument("--depth", type=int, default=None)
     parser.add_argument("--num-classes", type=int, default=None)
+    parser.add_argument("--dataset", type=str, default=None, choices=[None, "mnist", "cifar10"])
     parser.add_argument("--label", type=int, default=None, help="生成したい数字 (0-9)。省略時は 0..9 を循環")
     parser.add_argument("--guidance-scale", type=float, default=3.0)
     parser.add_argument("--seed", type=int, default=42)
@@ -35,9 +38,19 @@ def main() -> None:
 
     model_config = checkpoint.get("model_config", {})
     base_channels = args.base_channels or model_config.get("base_channels", 64)
+    depth = args.depth or model_config.get("depth", 2)
     num_classes = args.num_classes if args.num_classes is not None else model_config.get("num_classes", 0)
+    dataset = args.dataset or model_config.get("dataset", "mnist")
+    spec = DATASET_SPECS[dataset]
+    in_channels = model_config.get("in_channels", spec["in_channels"])
+    image_size = model_config.get("image_size", spec["image_size"])
 
-    model = TimeConditionedUNet(base_channels=base_channels, num_classes=num_classes).to(device)
+    model = TimeConditionedUNet(
+        in_channels=in_channels,
+        base_channels=base_channels,
+        num_classes=num_classes,
+        depth=depth,
+    ).to(device)
     load_model_weights(model, args.checkpoint, device)
 
     labels = None
@@ -53,7 +66,7 @@ def main() -> None:
 
     samples = sample_flow(
         model=model,
-        shape=(args.num_samples, 1, 28, 28),
+        shape=(args.num_samples, in_channels, image_size, image_size),
         device=device,
         steps=args.steps,
         labels=labels,

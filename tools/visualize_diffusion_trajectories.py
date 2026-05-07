@@ -20,18 +20,16 @@ from mnist_gen.utils import get_device, load_model_weights, set_seed
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Visualize DDPM trajectories via PCA.")
-    parser.add_argument("--checkpoint", type=str,
-                        default="/workspace/outputs/diffusion/exp_02/checkpoints/best.pt")
-    parser.add_argument("--out-path", type=str,
-                        default="/workspace/outputs/diffusion/trajectories/diffusion_traj.png")
+    parser.add_argument("--checkpoint", type=str, default="/workspace/outputs/diffusion/exp_02/checkpoints/best.pt")
+    parser.add_argument("--out-path", type=str, default="/workspace/outputs/diffusion/trajectories/diffusion_traj.png")
     parser.add_argument("--dataset", type=str, default=None, choices=[None, "mnist", "cifar10"])
     parser.add_argument("--data-dir", type=str, default=None)
     parser.add_argument("--num-gen", type=int, default=16)
     parser.add_argument("--num-data", type=int, default=16)
-    parser.add_argument("--steps", type=int, default=50,
-                        help="軌道として記録する点数（DDPM の総ステップから等間隔に間引く）。")
-    parser.add_argument("--timesteps", type=int, default=1000,
-                        help="DDPM スケジュールの総ステップ数。")
+    parser.add_argument(
+        "--steps", type=int, default=50, help="軌道として記録する点数（DDPM の総ステップから等間隔に間引く）。"
+    )
+    parser.add_argument("--timesteps", type=int, default=1000, help="DDPM スケジュールの総ステップ数。")
     parser.add_argument("--labels", type=int, nargs="+", default=None)
     parser.add_argument("--guidance-scale", type=float, default=3.0)
     parser.add_argument("--dim", type=int, choices=[2, 3], default=2)
@@ -127,9 +125,7 @@ def generate_trajectories(
         alpha_t = extract(schedule.alphas, t, x.shape)
         alpha_bar_t = extract(schedule.alpha_bars, t, x.shape)
 
-        mean = (1.0 / torch.sqrt(alpha_t)) * (
-            x - (beta_t / torch.sqrt(1.0 - alpha_bar_t)) * predicted_noise
-        )
+        mean = (1.0 / torch.sqrt(alpha_t)) * (x - (beta_t / torch.sqrt(1.0 - alpha_bar_t)) * predicted_noise)
         if i == 0:
             x = mean
         else:
@@ -218,10 +214,12 @@ def fit_pca_and_plot(
     real_feat = data_traj[:, -1, :]
     fit_feat = np.concatenate([noise_feat, real_feat], axis=0)
     NOISE_LABEL = -1
-    fit_labels = np.concatenate([
-        np.full(m, NOISE_LABEL),
-        data_labels if data_labels is not None else np.full(m, 0),
-    ])
+    fit_labels = np.concatenate(
+        [
+            np.full(m, NOISE_LABEL),
+            data_labels if data_labels is not None else np.full(m, 0),
+        ]
+    )
 
     pca_n = max(dim, min(pca_dim, fit_feat.shape[0], fit_feat.shape[1]))
     pca = PCA(n_components=pca_n)
@@ -261,13 +259,20 @@ def fit_pca_and_plot(
     def plot_line(ax, pts, color, alpha, linestyle, label=None, marker_alpha=None):
         ma = alpha if marker_alpha is None else marker_alpha
         if dim == 3:
-            ax.plot(pts[:, 0], pts[:, 1], pts[:, 2], color=color, alpha=alpha,
-                    linewidth=1.0, linestyle=linestyle, label=label)
+            ax.plot(
+                pts[:, 0],
+                pts[:, 1],
+                pts[:, 2],
+                color=color,
+                alpha=alpha,
+                linewidth=1.0,
+                linestyle=linestyle,
+                label=label,
+            )
             ax.scatter(pts[0, 0], pts[0, 1], pts[0, 2], color=color, marker="o", s=20, alpha=ma)
             ax.scatter(pts[-1, 0], pts[-1, 1], pts[-1, 2], color=color, marker="*", s=60, alpha=ma)
         else:
-            ax.plot(pts[:, 0], pts[:, 1], color=color, alpha=alpha,
-                    linewidth=1.0, linestyle=linestyle, label=label)
+            ax.plot(pts[:, 0], pts[:, 1], color=color, alpha=alpha, linewidth=1.0, linestyle=linestyle, label=label)
             ax.scatter(pts[0, 0], pts[0, 1], color=color, marker="o", s=20, alpha=ma)
             ax.scatter(pts[-1, 0], pts[-1, 1], color=color, marker="*", s=60, alpha=ma)
 
@@ -284,13 +289,13 @@ def fit_pca_and_plot(
     for i in range(n):
         lb = int(gen_labels[i]) if gen_labels is not None else None
         color = label_to_color.get(lb, default_color) if lb is not None else default_color
-        plot_line(ax, gen_proj[i], color=color, alpha=0.85, linestyle="-",
-                  label=legend_label(lb, "gen"))
+        plot_line(ax, gen_proj[i], color=color, alpha=0.85, linestyle="-", label=legend_label(lb, "gen"))
     for j in range(m):
         lb = int(data_labels[j]) if data_labels is not None else None
         color = label_to_color.get(lb, default_color) if lb is not None else default_color
-        plot_line(ax, data_proj[j], color=color, alpha=0.25, linestyle="--",
-                  label=legend_label(lb, "data"), marker_alpha=0.35)
+        plot_line(
+            ax, data_proj[j], color=color, alpha=0.25, linestyle="--", label=legend_label(lb, "data"), marker_alpha=0.35
+        )
 
     axis_prefix = "LD" if lda_used else "PC"
     ax.set_xlabel(f"{axis_prefix}1 ({explained[0] * 100:.1f}%)")
@@ -327,8 +332,15 @@ def main() -> None:
 
     gen_label_tensor = assign_labels(target_labels, args.num_gen, device, num_classes)
     gen_traj, gen_labels = generate_trajectories(
-        model, schedule, args.num_gen, args.steps, gen_label_tensor, args.guidance_scale, device,
-        in_channels, image_size,
+        model,
+        schedule,
+        args.num_gen,
+        args.steps,
+        gen_label_tensor,
+        args.guidance_scale,
+        device,
+        in_channels,
+        image_size,
     )
     print(f"generated trajectories: {gen_traj.shape}")
 
@@ -337,6 +349,7 @@ def main() -> None:
     print(f"data trajectories: {data_traj.shape}")
 
     out_path = Path(args.out_path)
+    out_path = out_path.with_name(f"{out_path.stem}_guided{args.guidance_scale}_dim{args.dim}{out_path.suffix}")
     fit_pca_and_plot(gen_traj, gen_labels, data_traj, data_labels, args.dim, args.pca_dim, out_path)
     print(f"saved: {out_path}")
 

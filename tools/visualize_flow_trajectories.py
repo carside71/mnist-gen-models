@@ -35,8 +35,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--guidance-scale", type=float, default=3.0)
     parser.add_argument("--dim", type=int, choices=[2, 3], default=2)
-    parser.add_argument("--pca-dim", type=int, default=50,
-                        help="LDA に渡す前段の PCA 次元数（上位N軸）。")
+    parser.add_argument("--pca-dim", type=int, default=50, help="LDA に渡す前段の PCA 次元数（上位N軸）。")
     parser.add_argument("--base-channels", type=int, default=None)
     parser.add_argument("--depth", type=int, default=None)
     parser.add_argument("--num-classes", type=int, default=None)
@@ -171,14 +170,16 @@ def fit_pca_and_plot(
     # 座標系は「実データ画像」と「ランダムノイズ」のみから決定する。
     # data_traj[:, 0]   は内挿時に引いたノイズ x0、
     # data_traj[:, -1]  は実データ画像 x1。
-    noise_feat = data_traj[:, 0, :]   # [m, D]
-    real_feat = data_traj[:, -1, :]   # [m, D]
+    noise_feat = data_traj[:, 0, :]  # [m, D]
+    real_feat = data_traj[:, -1, :]  # [m, D]
     fit_feat = np.concatenate([noise_feat, real_feat], axis=0)  # [2m, D]
     NOISE_LABEL = -1
-    fit_labels = np.concatenate([
-        np.full(m, NOISE_LABEL),
-        data_labels if data_labels is not None else np.full(m, 0),
-    ])
+    fit_labels = np.concatenate(
+        [
+            np.full(m, NOISE_LABEL),
+            data_labels if data_labels is not None else np.full(m, 0),
+        ]
+    )
 
     pca_n = max(dim, min(pca_dim, fit_feat.shape[0], fit_feat.shape[1]))
     pca = PCA(n_components=pca_n)
@@ -220,13 +221,20 @@ def fit_pca_and_plot(
     def plot_line(ax, pts, color, alpha, linestyle, label=None, marker_alpha=None):
         ma = alpha if marker_alpha is None else marker_alpha
         if dim == 3:
-            ax.plot(pts[:, 0], pts[:, 1], pts[:, 2], color=color, alpha=alpha,
-                    linewidth=1.0, linestyle=linestyle, label=label)
+            ax.plot(
+                pts[:, 0],
+                pts[:, 1],
+                pts[:, 2],
+                color=color,
+                alpha=alpha,
+                linewidth=1.0,
+                linestyle=linestyle,
+                label=label,
+            )
             ax.scatter(pts[0, 0], pts[0, 1], pts[0, 2], color=color, marker="o", s=20, alpha=ma)
             ax.scatter(pts[-1, 0], pts[-1, 1], pts[-1, 2], color=color, marker="*", s=60, alpha=ma)
         else:
-            ax.plot(pts[:, 0], pts[:, 1], color=color, alpha=alpha,
-                    linewidth=1.0, linestyle=linestyle, label=label)
+            ax.plot(pts[:, 0], pts[:, 1], color=color, alpha=alpha, linewidth=1.0, linestyle=linestyle, label=label)
             ax.scatter(pts[0, 0], pts[0, 1], color=color, marker="o", s=20, alpha=ma)
             ax.scatter(pts[-1, 0], pts[-1, 1], color=color, marker="*", s=60, alpha=ma)
 
@@ -243,13 +251,13 @@ def fit_pca_and_plot(
     for i in range(n):
         lb = int(gen_labels[i]) if gen_labels is not None else None
         color = label_to_color.get(lb, default_color) if lb is not None else default_color
-        plot_line(ax, gen_proj[i], color=color, alpha=0.85, linestyle="-",
-                  label=legend_label(lb, "gen"))
+        plot_line(ax, gen_proj[i], color=color, alpha=0.85, linestyle="-", label=legend_label(lb, "gen"))
     for j in range(m):
         lb = int(data_labels[j]) if data_labels is not None else None
         color = label_to_color.get(lb, default_color) if lb is not None else default_color
-        plot_line(ax, data_proj[j], color=color, alpha=0.25, linestyle="--",
-                  label=legend_label(lb, "data"), marker_alpha=0.35)
+        plot_line(
+            ax, data_proj[j], color=color, alpha=0.25, linestyle="--", label=legend_label(lb, "data"), marker_alpha=0.35
+        )
 
     axis_prefix = "LD" if lda_used else "PC"
     ax.set_xlabel(f"{axis_prefix}1 ({explained[0] * 100:.1f}%)")
@@ -285,8 +293,14 @@ def main() -> None:
 
     gen_label_tensor = assign_labels(target_labels, args.num_gen, device, num_classes)
     gen_traj, gen_labels = generate_trajectories(
-        model, args.num_gen, args.steps, gen_label_tensor, args.guidance_scale, device,
-        in_channels, image_size,
+        model,
+        args.num_gen,
+        args.steps,
+        gen_label_tensor,
+        args.guidance_scale,
+        device,
+        in_channels,
+        image_size,
     )
     print(f"generated trajectories: {gen_traj.shape}")
 
@@ -295,6 +309,7 @@ def main() -> None:
     print(f"data trajectories: {data_traj.shape}")
 
     out_path = Path(args.out_path)
+    out_path = out_path.with_name(f"{out_path.stem}_guided{args.guidance_scale}_dim{args.dim}{out_path.suffix}")
     fit_pca_and_plot(gen_traj, gen_labels, data_traj, data_labels, args.dim, args.pca_dim, out_path)
     print(f"saved: {out_path}")
 

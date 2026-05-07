@@ -1,48 +1,49 @@
 #!/usr/bin/env bash
+# Flow モデルの学習を実行する。
+#
+# 使い方:
+#   scripts/train_flow.sh                              # mnist で学習 (デフォルト)
+#   scripts/train_flow.sh --dataset cifar10            # cifar10 で学習 (data-dir も自動設定)
+#   scripts/train_flow.sh --root-dir /path/to/out_root # 出力ルートを変更
+#   scripts/train_flow.sh --epochs 50 --lr 1e-4        # 任意の引数を python へ pass-through
+#
+# 出力先は ${ROOT_DIR}/exp_NN として、空き番号を自動採番して作成する。
 set -euo pipefail
 
-# Usage:
-#   scripts/train_flow.sh
-#
-# 下の変数を編集すればデフォルト値を変更できます。
-# 一時的に値を変えたいだけなら、環境変数として渡すこともできます。
-#   例) EPOCHS=50 BATCH_SIZE=128 scripts/train_flow.sh
-#
-# また、コマンドライン引数はそのまま python スクリプトへ転送されるので、
-# 個別に上書きしたい場合は以下のように指定できます。
-#   例) scripts/train_flow.sh --epochs 50 --lr 1e-4
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-DATASET="${DATASET:-mnist}"
-if [ "${DATASET}" = "cifar10" ]; then
-    DATA_DIR="${DATA_DIR:-/workspace/datasets/cifar10}"
-else
-    DATA_DIR="${DATA_DIR:-/workspace/datasets/mnist}"
-fi
-OUT_DIR="${OUT_DIR:-/workspace/outputs/flow}"
-EPOCHS="${EPOCHS:-20}"
-BATCH_SIZE="${BATCH_SIZE:-256}"
-LR="${LR:-2e-4}"
-NUM_WORKERS="${NUM_WORKERS:-8}"
-BASE_CHANNELS="${BASE_CHANNELS:-64}"
-NUM_CLASSES="${NUM_CLASSES:-10}"
-P_UNCOND="${P_UNCOND:-0.1}"
-SEED="${SEED:-42}"
-VAL_RATIO="${VAL_RATIO:-0.1}"
+DATASET=mnist
+ROOT_DIR=/workspace/outputs/flow
+PASS=()
+args=("$@")
+i=0
+while [ $i -lt ${#args[@]} ]; do
+    case "${args[i]}" in
+        --root-dir) ROOT_DIR="${args[i+1]}"; i=$((i + 2)) ;;
+        --dataset)  DATASET="${args[i+1]}"; PASS+=("${args[i]}" "${args[i+1]}"); i=$((i + 2)) ;;
+        *)          PASS+=("${args[i]}"); i=$((i + 1)) ;;
+    esac
+done
+DATA_DIR="/workspace/datasets/${DATASET}"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+mkdir -p "${ROOT_DIR}"
+N=1
+while [ -e "${ROOT_DIR}/$(printf 'exp_%02d' "${N}")" ]; do
+    N=$((N + 1))
+done
+OUT_DIR="${ROOT_DIR}/$(printf 'exp_%02d' "${N}")"
 
-python "${PROJECT_ROOT}/src/train_flow.py" \
+python src/train_flow.py \
     --dataset "${DATASET}" \
     --data-dir "${DATA_DIR}" \
     --out-dir "${OUT_DIR}" \
-    --epochs "${EPOCHS}" \
-    --batch-size "${BATCH_SIZE}" \
-    --lr "${LR}" \
-    --num-workers "${NUM_WORKERS}" \
-    --base-channels "${BASE_CHANNELS}" \
-    --num-classes "${NUM_CLASSES}" \
-    --p-uncond "${P_UNCOND}" \
-    --seed "${SEED}" \
-    --val-ratio "${VAL_RATIO}" \
-    "$@"
+    --epochs 20 \
+    --batch-size 256 \
+    --lr 2e-4 \
+    --num-workers 8 \
+    --base-channels 64 \
+    --num-classes 10 \
+    --p-uncond 0.1 \
+    --seed 42 \
+    --val-ratio 0.1 \
+    ${PASS[@]+"${PASS[@]}"}

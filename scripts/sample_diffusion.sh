@@ -1,46 +1,35 @@
 #!/usr/bin/env bash
+# 学習済み Diffusion モデルからサンプリングを行う。
+#
+# 使い方:
+#   scripts/sample_diffusion.sh                                  # ROOT_DIR のチェックポイントを使用
+#   scripts/sample_diffusion.sh --root-dir /workspace/.../exp_03 # 実験ディレクトリを指定
+#   scripts/sample_diffusion.sh --dataset cifar10                # データセット指定
+#   scripts/sample_diffusion.sh --num-samples 128 --seed 0       # 任意の引数を pass-through
+#
+# checkpoint は ${ROOT_DIR}/checkpoints/best.pt、出力は ${ROOT_DIR}/samples/diffusion_samples.png。
 set -euo pipefail
 
-# Usage:
-#   scripts/sample_diffusion.sh
-#
-# 下の変数を編集すればデフォルト値を変更できます。
-# 一時的に値を変えたいだけなら、環境変数として渡すこともできます。
-#   例) NUM_SAMPLES=128 SEED=0 scripts/sample_diffusion.sh
-#
-# また、コマンドライン引数はそのまま python スクリプトへ転送されるので、
-# 個別に上書きしたい場合は以下のように指定できます。
-#   例) scripts/sample_diffusion.sh --num-samples 128 --seed 0
-#
-# BASE_CHANNELS / TIMESTEPS は未指定 (空文字) の場合は python 側のデフォルト
-# (= チェックポイントから推定 / 学習時の値) が使われます。
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-CHECKPOINT="${CHECKPOINT:-/workspace/outputs/diffusion/checkpoints/best.pt}"
-OUT_PATH="${OUT_PATH:-/workspace/outputs/diffusion/samples/diffusion_samples.png}"
-NUM_SAMPLES="${NUM_SAMPLES:-64}"
-BASE_CHANNELS="${BASE_CHANNELS:-}"
-TIMESTEPS="${TIMESTEPS:-}"
-NUM_CLASSES="${NUM_CLASSES:-}"
-DATASET="${DATASET:-}"
-LABEL="${LABEL:-}"
-GUIDANCE_SCALE="${GUIDANCE_SCALE:-3.0}"
-SEED="${SEED:-42}"
+ROOT_DIR=/workspace/outputs/diffusion/exp_01
+DATASET=mnist
+PASS=()
+args=("$@")
+i=0
+while [ $i -lt ${#args[@]} ]; do
+    case "${args[i]}" in
+        --root-dir) ROOT_DIR="${args[i+1]}"; i=$((i + 2)) ;;
+        --dataset)  DATASET="${args[i+1]}"; PASS+=("${args[i]}" "${args[i+1]}"); i=$((i + 2)) ;;
+        *)          PASS+=("${args[i]}"); i=$((i + 1)) ;;
+    esac
+done
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-
-EXTRA_ARGS=()
-[[ -n "${BASE_CHANNELS}" ]] && EXTRA_ARGS+=(--base-channels "${BASE_CHANNELS}")
-[[ -n "${TIMESTEPS}" ]] && EXTRA_ARGS+=(--timesteps "${TIMESTEPS}")
-[[ -n "${NUM_CLASSES}" ]] && EXTRA_ARGS+=(--num-classes "${NUM_CLASSES}")
-[[ -n "${DATASET}" ]] && EXTRA_ARGS+=(--dataset "${DATASET}")
-[[ -n "${LABEL}" ]] && EXTRA_ARGS+=(--label "${LABEL}")
-
-python "${PROJECT_ROOT}/src/sample_diffusion.py" \
-    --checkpoint "${CHECKPOINT}" \
-    --out-path "${OUT_PATH}" \
-    --num-samples "${NUM_SAMPLES}" \
-    --guidance-scale "${GUIDANCE_SCALE}" \
-    --seed "${SEED}" \
-    "${EXTRA_ARGS[@]}" \
-    "$@"
+python src/sample_diffusion.py \
+    --checkpoint "${ROOT_DIR}/checkpoints/best.pt" \
+    --out-path "${ROOT_DIR}/samples/diffusion_samples.png" \
+    --dataset "${DATASET}" \
+    --num-samples 64 \
+    --guidance-scale 0.0 \
+    --seed 42 \
+    ${PASS[@]+"${PASS[@]}"}

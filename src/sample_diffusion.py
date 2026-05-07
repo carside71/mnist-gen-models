@@ -65,9 +65,12 @@ def main() -> None:
             if not 0 <= args.label < num_classes:
                 raise ValueError(f"--label は 0..{num_classes - 1} の範囲で指定してください")
             labels = torch.full((args.num_samples,), args.label, device=device, dtype=torch.long)
-            out_path = out_path.with_name(f"{out_path.stem}_label{args.label}{out_path.suffix}")
+            out_path = out_path.with_name(
+                f"{out_path.stem}_guided{args.guidance_scale}_label{args.label}{out_path.suffix}"
+            )
         else:
             labels = torch.arange(args.num_samples, device=device, dtype=torch.long) % num_classes
+            out_path = out_path.with_name(f"{out_path.stem}_guided{args.guidance_scale}")
 
     samples = sample_ddpm(
         model=model,

@@ -6,7 +6,7 @@
 #   scripts/train_consistency_distillation.sh --dataset cifar10                   # cifar10 で蒸留
 #   scripts/train_consistency_distillation.sh --teacher-root /workspace/.../exp_01 # 教師の実験ディレクトリ
 #   scripts/train_consistency_distillation.sh --root-dir /path/to/out_root        # 出力ルート変更
-#   scripts/train_consistency_distillation.sh --epochs 20 --num-bins 40           # 任意引数 pass-through
+#   scripts/train_consistency_distillation.sh --epochs 20 --num-steps 40          # 任意引数 pass-through
 #
 # 出力先は ${ROOT_DIR}/exp_NN として、空き番号を自動採番して作成する。
 set -euo pipefail
@@ -15,7 +15,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 DATASET=mnist
 ROOT_DIR=/workspace/outputs/consistency
-TEACHER_ROOT=/workspace/outputs/diffusion/exp_01
+TEACHER_ROOT=/workspace/outputs/edm/exp_01
 PASS=()
 args=("$@")
 i=0
@@ -45,9 +45,8 @@ python src/train_consistency_distillation.py \
     --batch-size 256 \
     --lr 1e-4 \
     --num-workers 8 \
-    --num-bins 18 \
+    --num-steps 18 \
     --ema-decay 0.999 \
-    --sigma-data 0.5 \
     --loss mse \
     --seed 42 \
     --val-ratio 0.1 \

@@ -7,20 +7,20 @@ import torch.nn.functional as F
 from tqdm import tqdm
 
 from mnist_gen.data import DATASET_SPECS, get_train_val_dataloaders
-from mnist_gen.diffusion import DiffusionSchedule, extract, q_sample
+from mnist_gen.edm import f_edm, karras_sigmas
 from mnist_gen.models import TimeConditionedUNet
 from mnist_gen.utils import ensure_dir, get_device, save_checkpoint, save_config, set_seed
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Distill a pretrained DDPM teacher into a consistency model (Song et al., 2023)."
+        description="Distill a pretrained EDM teacher into a consistency model (Song et al., 2023)."
     )
 
     parser.add_argument(
         "--teacher-checkpoint",
         type=str,
-        default="/workspace/outputs/diffusion/checkpoints/best.pt",
+        default="/workspace/outputs/edm/exp_01/checkpoints/best.pt",
     )
     parser.add_argument("--dataset", type=str, default=None, choices=[None, "mnist", "cifar10"])
     parser.add_argument("--data-dir", type=str, default=None)
@@ -32,62 +32,61 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--val-ratio", type=float, default=0.1)
 
-    parser.add_argument("--num-bins", type=int, default=18, help="CD の離散時刻数 N")
+    parser.add_argument("--num-steps", type=int, default=18, help="CD の離散時刻数 N (論文 Algorithm 2)")
+    parser.add_argument("--sigma-min", type=float, default=None, help="None なら教師 ckpt から継承")
+    parser.add_argument("--sigma-max", type=float, default=None)
+    parser.add_argument("--rho", type=float, default=None)
+    parser.add_argument("--sigma-data", type=float, default=None)
     parser.add_argument("--ema-decay", type=float, default=0.999)
-    parser.add_argument("--sigma-data", type=float, default=0.5)
     parser.add_argument("--loss", type=str, default="mse", choices=["mse", "pseudo_huber"])
 
     # 教師ckptの構成を上書きしたい場合
     parser.add_argument("--base-channels", type=int, default=None)
     parser.add_argument("--depth", type=int, default=None)
     parser.add_argument("--num-classes", type=int, default=None)
-    parser.add_argument("--timesteps", type=int, default=None)
 
     return parser.parse_args()
-
-
-def cd_skip_out(sigma_t: torch.Tensor, sigma_data: float) -> tuple[torch.Tensor, torch.Tensor]:
-    """EDM 流の skip/out 係数。f(x,0)=x_0 となる境界条件を満たす。"""
-    sd2 = sigma_data * sigma_data
-    c_skip = sd2 / (sigma_t * sigma_t + sd2)
-    c_out = sigma_t * sigma_data / torch.sqrt(sigma_t * sigma_t + sd2)
-    return c_skip, c_out
-
-
-def sigma_from_index(t_idx: torch.Tensor, schedule: DiffusionSchedule, x_shape: torch.Size) -> torch.Tensor:
-    """DDPM の分散保存形に対応する σ(t) = √(1-ᾱ_t)/√(ᾱ_t)。"""
-    alpha_bar = extract(schedule.alpha_bars, t_idx, x_shape)
-    return torch.sqrt((1.0 - alpha_bar) / alpha_bar)
 
 
 def f_consistency(
     model: torch.nn.Module,
     x: torch.Tensor,
-    t_idx: torch.Tensor,
-    schedule: DiffusionSchedule,
+    sigma: torch.Tensor,
     sigma_data: float,
+    sigma_min: float,
     labels: torch.Tensor | None,
 ) -> torch.Tensor:
-    """skip parameterized consistency function f_θ(x, t) = c_skip x + c_out F_θ(x, t)。"""
-    sigma_t = sigma_from_index(t_idx, schedule, x.shape)
-    c_skip, c_out = cd_skip_out(sigma_t, sigma_data)
-    t_norm = t_idx.float() / (schedule.timesteps - 1)
-    out = model(x, t_norm, labels)
-    return c_skip * x + c_out * out
+    """学生の consistency 関数。論文 §3.3 で f_θ は EDM 前処理付きデノイザと同形。"""
+    return f_edm(model, x, sigma, sigma_data, sigma_min, labels)
 
 
-def ddim_step_index(
-    x_hi: torch.Tensor,
-    eps: torch.Tensor,
-    t_hi_idx: torch.Tensor,
-    t_lo_idx: torch.Tensor,
-    schedule: DiffusionSchedule,
+def teacher_denoise(
+    teacher: torch.nn.Module,
+    x: torch.Tensor,
+    sigma: torch.Tensor,
+    sigma_data: float,
+    sigma_min: float,
+    labels: torch.Tensor | None,
 ) -> torch.Tensor:
-    """DDIM η=0 の 1 ステップ。t_hi → t_lo へ遷移。"""
-    ab_hi = extract(schedule.alpha_bars, t_hi_idx, x_hi.shape)
-    ab_lo = extract(schedule.alpha_bars, t_lo_idx, x_hi.shape)
-    x0_pred = (x_hi - torch.sqrt(1.0 - ab_hi) * eps) / torch.sqrt(ab_hi)
-    return torch.sqrt(ab_lo) * x0_pred + torch.sqrt(1.0 - ab_lo) * eps
+    """EDM 教師の x₀ 予測 D_φ(x, σ)。教師と学生は同じ EDM 前処理を共有する。"""
+    return f_edm(teacher, x, sigma, sigma_data, sigma_min, labels)
+
+
+def euler_step(
+    x_hi: torch.Tensor,
+    sigma_hi: torch.Tensor,
+    sigma_lo: torch.Tensor,
+    teacher: torch.nn.Module,
+    sigma_data: float,
+    sigma_min: float,
+    labels: torch.Tensor | None,
+) -> torch.Tensor:
+    """論文の Φ(·;φ) を Euler で実装。dx/dσ = (x − D_φ)/σ。"""
+    sigma_hi_b = sigma_hi.view(-1, 1, 1, 1)
+    sigma_lo_b = sigma_lo.view(-1, 1, 1, 1)
+    D = teacher_denoise(teacher, x_hi, sigma_hi, sigma_data, sigma_min, labels)
+    d = (x_hi - D) / sigma_hi_b
+    return x_hi + (sigma_lo_b - sigma_hi_b) * d
 
 
 def update_ema(ema_model: torch.nn.Module, model: torch.nn.Module, decay: float) -> None:
@@ -113,17 +112,27 @@ def main() -> None:
     print(f"device: {device}")
 
     teacher_ckpt = torch.load(args.teacher_checkpoint, map_location=device)
+    if "edm_config" not in teacher_ckpt:
+        raise ValueError(
+            "EDM 教師チェックポイントが必要です (edm_config が見つかりません)。"
+            " train_edm.py で学習した checkpoint を --teacher-checkpoint に指定してください。"
+        )
+
     t_model_cfg = teacher_ckpt.get("model_config", {})
-    t_diff_cfg = teacher_ckpt.get("diffusion_config", {})
+    t_edm_cfg = teacher_ckpt["edm_config"]
 
     base_channels = args.base_channels or t_model_cfg.get("base_channels", 64)
     depth = args.depth or t_model_cfg.get("depth", 2)
     num_classes = args.num_classes if args.num_classes is not None else t_model_cfg.get("num_classes", 0)
-    timesteps = args.timesteps or t_diff_cfg.get("timesteps", 1000)
     dataset = args.dataset or t_model_cfg.get("dataset", "mnist")
     spec = DATASET_SPECS[dataset]
     in_channels = t_model_cfg.get("in_channels", spec["in_channels"])
     image_size = t_model_cfg.get("image_size", spec["image_size"])
+
+    sigma_min = args.sigma_min if args.sigma_min is not None else t_edm_cfg["sigma_min"]
+    sigma_max = args.sigma_max if args.sigma_max is not None else t_edm_cfg["sigma_max"]
+    rho = args.rho if args.rho is not None else t_edm_cfg["rho"]
+    sigma_data = args.sigma_data if args.sigma_data is not None else t_edm_cfg["sigma_data"]
 
     data_dir = args.data_dir or f"/workspace/datasets/{dataset}"
 
@@ -157,7 +166,7 @@ def main() -> None:
         num_classes=num_classes,
         depth=depth,
     ).to(device)
-    # 教師重みで warm-start
+    # 教師重みで warm-start (論文 Algorithm 2)
     student.load_state_dict(teacher_ckpt["model"])
 
     student_ema = copy.deepcopy(student)
@@ -166,10 +175,9 @@ def main() -> None:
     student_ema.eval()
 
     optimizer = torch.optim.AdamW(student.parameters(), lr=args.lr)
-    schedule = DiffusionSchedule.create(timesteps=timesteps, device=device)
 
-    # 等間隔のビン境界 t_idx[0]=0, t_idx[N]=T-1
-    t_idx_grid = torch.linspace(0, timesteps - 1, args.num_bins + 1, device=device).round().long()
+    # Karras 風 σ-grid。昇順 [σ_min, ..., σ_max], 長さ N+1。
+    sigma_grid = karras_sigmas(args.num_steps, sigma_min, sigma_max, rho, device)
 
     best_val_loss = float("inf")
 
@@ -184,21 +192,21 @@ def main() -> None:
             labels = labels.to(device, non_blocking=True) if num_classes > 0 else None
             B = images.size(0)
 
-            # サンプルごとに n ∈ [0, N-1] を一様サンプル → t_hi = t_idx[n+1], t_lo = t_idx[n]
-            n_idx = torch.randint(0, args.num_bins, (B,), device=device)
-            t_hi = t_idx_grid[n_idx + 1]
-            t_lo = t_idx_grid[n_idx]
+            # 論文 Algorithm 2: n ∈ [1, N-1], σ_{n+1} (high), σ_n (low)
+            n_idx = torch.randint(1, args.num_steps, (B,), device=device)
+            sigma_hi = sigma_grid[n_idx + 1]
+            sigma_lo = sigma_grid[n_idx]
 
-            x_hi, _ = q_sample(images, t_hi, schedule)
+            # EDM forward: x_σ = x + σ·z
+            z = torch.randn_like(images)
+            x_hi = images + sigma_hi.view(-1, 1, 1, 1) * z
 
             with torch.no_grad():
-                t_hi_norm = t_hi.float() / (timesteps - 1)
-                eps_teacher = teacher(x_hi, t_hi_norm, labels)
-                x_lo_hat = ddim_step_index(x_hi, eps_teacher, t_hi, t_lo, schedule)
+                x_lo_hat = euler_step(x_hi, sigma_hi, sigma_lo, teacher, sigma_data, sigma_min, labels)
 
-            pred = f_consistency(student, x_hi, t_hi, schedule, args.sigma_data, labels)
+            pred = f_consistency(student, x_hi, sigma_hi, sigma_data, sigma_min, labels)
             with torch.no_grad():
-                target = f_consistency(student_ema, x_lo_hat, t_lo, schedule, args.sigma_data, labels)
+                target = f_consistency(student_ema, x_lo_hat, sigma_lo, sigma_data, sigma_min, labels)
 
             loss = consistency_loss(pred, target, args.loss)
 
@@ -223,23 +231,38 @@ def main() -> None:
                 labels = labels.to(device, non_blocking=True) if num_classes > 0 else None
                 B = images.size(0)
 
-                n_idx = torch.randint(0, args.num_bins, (B,), device=device)
-                t_hi = t_idx_grid[n_idx + 1]
-                t_lo = t_idx_grid[n_idx]
+                n_idx = torch.randint(1, args.num_steps, (B,), device=device)
+                sigma_hi = sigma_grid[n_idx + 1]
+                sigma_lo = sigma_grid[n_idx]
 
-                x_hi, _ = q_sample(images, t_hi, schedule)
-                t_hi_norm = t_hi.float() / (timesteps - 1)
-                eps_teacher = teacher(x_hi, t_hi_norm, labels)
-                x_lo_hat = ddim_step_index(x_hi, eps_teacher, t_hi, t_lo, schedule)
+                z = torch.randn_like(images)
+                x_hi = images + sigma_hi.view(-1, 1, 1, 1) * z
+                x_lo_hat = euler_step(x_hi, sigma_hi, sigma_lo, teacher, sigma_data, sigma_min, labels)
 
-                pred = f_consistency(student, x_hi, t_hi, schedule, args.sigma_data, labels)
-                target = f_consistency(student_ema, x_lo_hat, t_lo, schedule, args.sigma_data, labels)
+                pred = f_consistency(student, x_hi, sigma_hi, sigma_data, sigma_min, labels)
+                target = f_consistency(student_ema, x_lo_hat, sigma_lo, sigma_data, sigma_min, labels)
                 v = consistency_loss(pred, target, args.loss)
                 val_total += v.item() * B
                 val_count += B
         val_loss = val_total / val_count
 
-        print(f"epoch {epoch}: train_loss={train_loss:.6f} val_loss={val_loss:.6f}")
+        with torch.no_grad():
+            probe_B = min(64, args.batch_size)
+            probe_shape = (probe_B, in_channels, image_size, image_size)
+            x_init = sigma_max * torch.randn(probe_shape, device=device)
+            sigma_init = torch.full((probe_B,), sigma_max, device=device)
+            if num_classes > 0:
+                probe_labels = torch.arange(probe_B, device=device, dtype=torch.long) % num_classes
+            else:
+                probe_labels = None
+            probe_x0 = f_consistency(student_ema, x_init, sigma_init, sigma_data, sigma_min, probe_labels)
+            one_shot_var = probe_x0.var().item()
+            one_shot_abs_mean = probe_x0.abs().mean().item()
+
+        print(
+            f"epoch {epoch}: train_loss={train_loss:.6f} val_loss={val_loss:.6f} "
+            f"one_shot_var={one_shot_var:.4f} one_shot_abs_mean={one_shot_abs_mean:.4f}"
+        )
 
         extra = {
             "model_config": {
@@ -250,13 +273,15 @@ def main() -> None:
                 "image_size": image_size,
                 "dataset": dataset,
             },
-            "diffusion_config": {
-                "timesteps": timesteps,
+            "edm_config": {
+                "sigma_min": sigma_min,
+                "sigma_max": sigma_max,
+                "rho": rho,
+                "sigma_data": sigma_data,
             },
             "consistency_config": {
-                "num_bins": args.num_bins,
+                "num_steps": args.num_steps,
                 "ema_decay": args.ema_decay,
-                "sigma_data": args.sigma_data,
                 "loss": args.loss,
                 "teacher_checkpoint": args.teacher_checkpoint,
             },

@@ -4,77 +4,31 @@ from pathlib import Path
 import torch
 
 from mnist_gen.data import DATASET_SPECS
-from mnist_gen.edm import f_edm, karras_sigmas
+from mnist_gen.edm import heun_sample, karras_sigmas
 from mnist_gen.models import TimeConditionedUNet
-from mnist_gen.utils import get_device, save_samples_grid, set_seed
+from mnist_gen.utils import get_device, load_model_weights, save_samples_grid, set_seed
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Sample images from a distilled consistency model.")
+    parser = argparse.ArgumentParser(description="Sample images from a trained EDM diffusion model.")
 
-    parser.add_argument("--checkpoint", type=str, default="/workspace/outputs/consistency/checkpoints/best.pt")
-    parser.add_argument(
-        "--out-path",
-        type=str,
-        default="/workspace/outputs/consistency/samples/consistency_samples.png",
-    )
+    parser.add_argument("--checkpoint", type=str, default="/workspace/outputs/edm/checkpoints/best.pt")
+    parser.add_argument("--out-path", type=str, default="/workspace/outputs/edm/samples/edm_samples.png")
     parser.add_argument("--num-samples", type=int, default=64)
-    parser.add_argument("--steps", type=int, default=1, help="multistep CM のサンプリングステップ数")
-    parser.add_argument("--use-ema", action="store_true", default=True)
-    parser.add_argument("--no-ema", dest="use_ema", action="store_false")
-
+    parser.add_argument("--num-steps", type=int, default=18, help="Heun サンプラの離散ステップ数")
     parser.add_argument("--base-channels", type=int, default=None)
     parser.add_argument("--depth", type=int, default=None)
     parser.add_argument("--num-classes", type=int, default=None)
-    parser.add_argument("--num-steps", type=int, default=None)
     parser.add_argument("--sigma-min", type=float, default=None)
     parser.add_argument("--sigma-max", type=float, default=None)
     parser.add_argument("--rho", type=float, default=None)
     parser.add_argument("--sigma-data", type=float, default=None)
     parser.add_argument("--dataset", type=str, default=None, choices=[None, "mnist", "cifar10"])
-    parser.add_argument("--label", type=int, default=None)
+    parser.add_argument("--label", type=int, default=None, help="生成したい数字 (0-9)。省略時は 0..9 を循環")
+    parser.add_argument("--guidance-scale", type=float, default=3.0)
     parser.add_argument("--seed", type=int, default=42)
 
     return parser.parse_args()
-
-
-@torch.no_grad()
-def sample_consistency(
-    model: torch.nn.Module,
-    shape: tuple[int, int, int, int],
-    device: torch.device,
-    sigma_grid: torch.Tensor,
-    sigma_data: float,
-    sigma_min: float,
-    sigma_max: float,
-    steps: int,
-    labels: torch.Tensor | None,
-) -> torch.Tensor:
-    """multistep consistency sampling (論文 Algorithm 1)。steps=1 で 1 ショット。"""
-    model.eval()
-    B = shape[0]
-
-    # 初期点: x ~ N(0, σ_max² I)
-    x_init = sigma_max * torch.randn(shape, device=device)
-    sigma_init = torch.full((B,), sigma_max, device=device)
-    x0 = f_edm(model, x_init, sigma_init, sigma_data, sigma_min, labels)
-
-    if steps <= 1:
-        return x0.clamp(-1.0, 1.0)
-
-    # 中間 σ を grid から steps-1 個選ぶ（降順、両端 σ_min/σ_max は除く）
-    mid = sigma_grid[1:-1].flip(0)
-    if len(mid) == 0:
-        return x0.clamp(-1.0, 1.0)
-    pick = torch.linspace(0, len(mid) - 1, steps - 1).round().long()
-
-    for s in mid[pick].tolist():
-        sigma_cur = torch.full((B,), float(s), device=device)
-        z = torch.randn_like(x0)
-        x_t = x0 + float(s) * z
-        x0 = f_edm(model, x_t, sigma_cur, sigma_data, sigma_min, labels)
-
-    return x0.clamp(-1.0, 1.0)
 
 
 def main() -> None:
@@ -85,14 +39,13 @@ def main() -> None:
     print(f"device: {device}")
 
     checkpoint = torch.load(args.checkpoint, map_location=device)
+
     model_config = checkpoint.get("model_config", {})
     edm_config = checkpoint.get("edm_config", {})
-    consistency_config = checkpoint.get("consistency_config", {})
 
     base_channels = args.base_channels or model_config.get("base_channels", 64)
     depth = args.depth or model_config.get("depth", 2)
     num_classes = args.num_classes if args.num_classes is not None else model_config.get("num_classes", 0)
-    num_steps = args.num_steps or consistency_config.get("num_steps", 18)
     sigma_min = args.sigma_min if args.sigma_min is not None else edm_config.get("sigma_min", 0.002)
     sigma_max = args.sigma_max if args.sigma_max is not None else edm_config.get("sigma_max", 80.0)
     rho = args.rho if args.rho is not None else edm_config.get("rho", 7.0)
@@ -108,13 +61,9 @@ def main() -> None:
         num_classes=num_classes,
         depth=depth,
     ).to(device)
+    load_model_weights(model, args.checkpoint, device)
 
-    state_key = "model_ema" if (args.use_ema and "model_ema" in checkpoint) else "model"
-    model.load_state_dict(checkpoint[state_key])
-    model.eval()
-    print(f"loaded weights from key: {state_key}")
-
-    sigma_grid = karras_sigmas(num_steps, sigma_min, sigma_max, rho, device)
+    sigma_grid = karras_sigmas(args.num_steps, sigma_min, sigma_max, rho, device)
 
     labels = None
     out_path = Path(args.out_path)
@@ -123,23 +72,25 @@ def main() -> None:
             if not 0 <= args.label < num_classes:
                 raise ValueError(f"--label は 0..{num_classes - 1} の範囲で指定してください")
             labels = torch.full((args.num_samples,), args.label, device=device, dtype=torch.long)
-            out_path = out_path.with_name(f"{out_path.stem}_steps{args.steps}_label{args.label}{out_path.suffix}")
+            out_path = out_path.with_name(
+                f"{out_path.stem}_guided{args.guidance_scale}_label{args.label}{out_path.suffix}"
+            )
         else:
             labels = torch.arange(args.num_samples, device=device, dtype=torch.long) % num_classes
-            out_path = out_path.with_name(f"{out_path.stem}_steps{args.steps}{out_path.suffix}")
-    else:
-        out_path = out_path.with_name(f"{out_path.stem}_steps{args.steps}{out_path.suffix}")
+            out_path = out_path.with_name(f"{out_path.stem}_guided{args.guidance_scale}{out_path.suffix}")
 
-    samples = sample_consistency(
+    null_label_idx = model.null_label_idx if num_classes > 0 else None
+
+    samples = heun_sample(
         model=model,
         shape=(args.num_samples, in_channels, image_size, image_size),
         device=device,
         sigma_grid=sigma_grid,
         sigma_data=sigma_data,
         sigma_min=sigma_min,
-        sigma_max=sigma_max,
-        steps=args.steps,
         labels=labels,
+        guidance_scale=args.guidance_scale,
+        null_label_idx=null_label_idx,
     )
 
     save_samples_grid(samples, out_path)

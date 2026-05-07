@@ -80,6 +80,16 @@ def assign_labels(
     return torch.tensor(labels, device=device, dtype=torch.long)
 
 
+def _normalize_snapshot(x: torch.Tensor, sigma_val: float, sigma_data: float) -> np.ndarray:
+    """EDM の c_in(σ) = 1/√(σ²+σ_d²) で点をスケール正規化して flatten。
+
+    σ ∈ [0.002, 80] に渡って点のスケールが大きく変わるため、生の値で PCA を取ると
+    主成分が σ の大きさ軸に固定されて構造が潰れる。c_in をかけて単位スケールに揃える。
+    """
+    c_in = 1.0 / ((sigma_val * sigma_val + sigma_data * sigma_data) ** 0.5)
+    return (x * c_in).detach().cpu().reshape(x.size(0), -1).numpy()
+
+
 @torch.no_grad()
 def generate_trajectories(
     model: TimeConditionedUNet,
@@ -93,7 +103,8 @@ def generate_trajectories(
     in_channels: int,
     image_size: int,
 ) -> tuple[np.ndarray, np.ndarray | None]:
-    """EDM Heun 逆過程の軌道を [n, S+1, 784] で返す。時間方向はノイズ→画像。"""
+    """EDM Heun 逆過程の軌道を [n, S+1, 784] で返す。時間方向はノイズ→画像。
+    各点は c_in(σ) で正規化してから記録する。"""
     sigmas = sigma_grid.flip(0)  # 降順 [σ_max, ..., σ_min]
     use_cfg = (
         labels is not None
@@ -110,7 +121,7 @@ def generate_trajectories(
         return f_edm(model, x_in, sigma_in, sigma_data, sigma_min, labels)
 
     x = sigmas[0] * torch.randn(n, in_channels, image_size, image_size, device=device)
-    snapshots = [x.detach().cpu().reshape(n, -1).numpy()]
+    snapshots = [_normalize_snapshot(x, sigmas[0].item(), sigma_data)]
 
     for i in range(len(sigmas) - 1):
         sigma_cur = torch.full((n,), sigmas[i].item(), device=device)
@@ -127,7 +138,7 @@ def generate_trajectories(
             d_prime = (x_euler - denoise(x_euler, sigma_next)) / sigma_next_b
             x = x + 0.5 * (sigma_next_b - sigma_cur_b) * (d + d_prime)
 
-        snapshots.append(x.detach().cpu().reshape(n, -1).numpy())
+        snapshots.append(_normalize_snapshot(x, sigmas[i + 1].item(), sigma_data))
 
     traj_arr = np.stack(snapshots, axis=1)  # [n, S+1, D]
     label_arr = labels.detach().cpu().numpy() if labels is not None else None
@@ -164,21 +175,21 @@ def sample_data_images(
 
 
 def make_data_trajectories(
-    x1: torch.Tensor, sigma_grid: torch.Tensor, device: torch.device
+    x1: torch.Tensor, sigma_grid: torch.Tensor, sigma_data: float, device: torch.device
 ) -> np.ndarray:
     """前向き拡散による軌道を [m, S+1, D] で返す。時間方向はノイズ→画像。
 
     EDM 形式: x_σ = x + σ·z。固定ノイズで σ を降順に適用。
+    各点は c_in(σ) で正規化してから記録する（generate_trajectories と同じ規約）。
     """
     sigmas = sigma_grid.flip(0)  # 降順 [σ_max, ..., σ_min]
-    m = x1.size(0)
     x1_dev = x1.to(device)
     fixed_noise = torch.randn_like(x1_dev)
 
     out = []
     for s in sigmas.tolist():
         x_sigma = x1_dev + float(s) * fixed_noise
-        out.append(x_sigma.detach().cpu().reshape(m, -1).numpy())
+        out.append(_normalize_snapshot(x_sigma, float(s), sigma_data))
     return np.stack(out, axis=1)
 
 
@@ -336,7 +347,7 @@ def main() -> None:
     print(f"generated trajectories: {gen_traj.shape}")
 
     x1, data_labels = sample_data_images(dataset_name, data_dir, target_labels, args.num_data, args.seed)
-    data_traj = make_data_trajectories(x1, sigma_grid, device)
+    data_traj = make_data_trajectories(x1, sigma_grid, sigma_data, device)
     print(f"data trajectories: {data_traj.shape}")
 
     out_path = Path(args.out_path)

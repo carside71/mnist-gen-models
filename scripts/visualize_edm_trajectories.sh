@@ -31,8 +31,8 @@ python tools/visualize_edm_trajectories.py \
     --out-path "${ROOT_DIR}/trajectories/edm_traj.png" \
     --dataset "${DATASET}" \
     --data-dir "${DATA_DIR}" \
-    --num-gen 16 \
-    --num-data 16 \
+    --num-gen 10 \
+    --num-data 100 \
     --num-steps 18 \
     --dim 2 \
     --guidance-scale 0.0 \

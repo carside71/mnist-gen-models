@@ -31,8 +31,8 @@ python tools/visualize_diffusion_trajectories.py \
     --out-path "${ROOT_DIR}/trajectories/diffusion_traj.png" \
     --dataset "${DATASET}" \
     --data-dir "${DATA_DIR}" \
-    --num-gen 16 \
-    --num-data 16 \
+    --num-gen 10 \
+    --num-data 100 \
     --steps 50 \
     --timesteps 1000 \
     --dim 2 \

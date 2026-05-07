@@ -65,7 +65,7 @@ def main() -> None:
             )
         else:
             labels = torch.arange(args.num_samples, device=device, dtype=torch.long) % num_classes
-            out_path = out_path.with_name(f"{out_path.stem}_guided{args.guidance_scale}")
+            out_path = out_path.with_name(f"{out_path.stem}_guided{args.guidance_scale}{out_path.suffix}")
 
     samples = sample_flow(
         model=model,
